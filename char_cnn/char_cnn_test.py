@@ -5,7 +5,8 @@ print('Running' if __name__ == '__main__' else 'Importing',
 import argparse
 import sys
 from utils import *
-from model import TCN, TCN_DAU
+from model import TCN
+from model_dau import TCN_DAU
 import time
 import math
 import tensorflow as tf
@@ -52,6 +53,8 @@ parser.add_argument('--save_path', type=str, default='./output/',
                     help='output folder for saved model')
 parser.add_argument('--gpu', type=str, default='0',
                     help='gpu id (default: 0)')
+parser.add_argument('--use_dau', action='store_true',
+                    help='enable DAU model (default: false)')
 
 args = parser.parse_args()
 
@@ -84,14 +87,24 @@ dropout = args.dropout
 emb_dropout = args.emb_dropout
 
 
-output = TCN(
-    input_layer,
-    n_characters,
-    num_chans,
-    args.emsize,
-    kernel_size=k_size,
-    dropout=dropout_switch,
-    bn_switch=bn_switch)
+if args.use_dau:
+    output = TCN_DAU(
+        input_layer,
+        n_characters,
+        num_chans,
+        args.emsize,
+        kernel_size=k_size,
+        dropout=dropout_switch,
+        bn_switch=bn_switch)
+else:
+    output = TCN(
+        input_layer,
+        n_characters,
+        num_chans,
+        args.emsize,
+        kernel_size=k_size,
+        dropout=dropout_switch,
+        bn_switch=bn_switch)
 
 eff_history = args.seq_len - args.validseqlen
 final_output = tf.reshape(output[:, eff_history:, :], (-1, n_characters))
@@ -103,7 +116,7 @@ loss = tf.nn.softmax_cross_entropy_with_logits_v2(
 
 cross_entropy_mean = tf.reduce_mean(loss, name='cross_entropy')
 
-#loss_for_minimization = cross_entropy_mean
+loss_for_minimization = cross_entropy_mean
 
 reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
 losses_regularization = tf.add_n(reg_losses, name='losses_regularization') if len(reg_losses) > 0 else tf.to_float(0)
