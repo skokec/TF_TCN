@@ -114,14 +114,20 @@ def weightNormConvolution1d(x, num_filters, dilation_rate, filter_size=3, stride
             if gated:
                 num_filters = num_filters * 2
 
+            num_in_channels = int(x.get_shape()[-1])
+
             # size of V is L, Cin, Cout
-            V = tf.get_variable('V', [filter_size, int(x.get_shape()[-1]), num_filters],
-                                tf.float32, tf.random_normal_initializer(0, 0.01),
+            V = tf.get_variable('V', [filter_size, num_in_channels, num_filters],
+                                tf.float32,
+                                tf.initializers.variance_scaling(scale=1/3.0, distribution='uniform'),
                                 trainable=True)
+            def g_init(shape, dtype, partition_info):
+                v_norm = tf.norm(tf.reshape(V,[-1,num_filters]), axis=0, ord=2)
+                return tf.reshape(v_norm, shape)
             g = tf.get_variable('g', shape=[num_filters], dtype=tf.float32,
-                                initializer=tf.constant_initializer(1.), trainable=True)
+                                initializer=g_init, trainable=True)
             b = tf.get_variable('b', shape=[num_filters], dtype=tf.float32,
-                                initializer=None, trainable=True)
+                                initializer=tf.zeros_initializer(), trainable=True)
 
             # size of input x is N, L, Cin
 
@@ -185,13 +191,13 @@ def TemporalBlock(input_layer, out_channels, filter_size, stride, dilation_rate,
         # refer to https://colab.research.google.com/drive/1la33lW7FQV1RicpfzyLq9H0SH1VSD4LE#scrollTo=TcFQu3F0y-fy
         # shape should be [N, 1, C]
         noise_shape = (tf.shape(conv1)[0], tf.constant(1), tf.shape(conv1)[2])
-        out1 = tf.nn.dropout(conv1, keep_prob, noise_shape)
+        out1 = tf.nn.dropout(conv1, keep_prob)
         if atten:
             out1 = attentionBlock(out1, counters, dropout)
 
         conv2 = weightNormConvolution1d(out1, out_channels, dilation_rate, filter_size,
             [stride], counters=counters, init=init, gated=gated)
-        out2 = tf.nn.dropout(conv2, keep_prob, noise_shape)
+        out2 = tf.nn.dropout(conv2, keep_prob)
         if atten:
             out2 = attentionBlock(out2, counters, dropout)
 
@@ -213,9 +219,11 @@ def TemporalBlock(input_layer, out_channels, filter_size, stride, dilation_rate,
             residual = H*T + input_layer * (1.0 - T)
         elif in_channels != out_channels:
             W_h = tf.get_variable('W_h', [1, int(input_layer.get_shape()[-1]), out_channels],
-                                  tf.float32, tf.random_normal_initializer(0, 0.01), trainable=True)
+                                  tf.float32,
+                                  tf.random_normal_initializer(stddev=0.01),
+                                  trainable=True)
             b_h = tf.get_variable('b_h', shape=[out_channels], dtype=tf.float32,
-                                  initializer=None, trainable=True)
+                                  initializer=tf.zeros_initializer(), trainable=True)
             residual = tf.nn.bias_add(tf.nn.convolution(input_layer, W_h, 'SAME'), b_h)
         else:
             print("no residual convolution")

@@ -1,17 +1,17 @@
 from pathlib import Path
-print('Running' if __name__ == '__main__' else 'Importing', Path(__file__).resolve())
+print('Running' if __name__ == '__main__' else 'Importing',
+      Path(__file__).resolve())
 
 import argparse
 import sys
-from .utils import *
-from .model import TCN
+from utils import *
+from model import TCN, TCN_DAU
 import time
 import math
 import tensorflow as tf
 
 import warnings
-warnings.filterwarnings("ignore")   # Suppress the RunTimeWarning on unicode
-
+warnings.filterwarnings("ignore")  # Suppress the RunTimeWarning on unicode
 
 parser = argparse.ArgumentParser(description='Sequence Modeling - Character Level Language Model')
 parser.add_argument('--batch_size', type=int, default=32, metavar='N',
@@ -48,23 +48,31 @@ parser.add_argument('--seed', type=int, default=1111,
                     help='random seed (default: 1111)')
 parser.add_argument('--dataset', type=str, default='ptb',
                     help='dataset to use (default: ptb)')
+parser.add_argument('--save_path', type=str, default='./output/',
+                    help='output folder for saved model')
+parser.add_argument('--gpu', type=str, default='0',
+                    help='gpu id (default: 0)')
+
 args = parser.parse_args()
 
 # Set the random seed manually for reproducibility.
 tf.set_random_seed(args.seed)
 
 print(args)
-file, file_len, valfile, valfile_len, testfile, testfile_len, corpus = data_generator(args)
+file, file_len, valfile, valfile_len, testfile, testfile_len, corpus = data_generator(
+    args)
 
 n_characters = len(corpus.dict)
 train_data = batchify(char_tensor(corpus, file), args.batch_size)
-val_data = batchify(char_tensor(corpus, valfile), args.batch_size)
-test_data = batchify(char_tensor(corpus, testfile), args.batch_size)
+val_data = batchify(char_tensor(corpus, valfile), 1)
+test_data = batchify(char_tensor(corpus, testfile), 1)
 print("Corpus size: ", n_characters)
 print("train_data size:", train_data.shape)
 print("val_data size", val_data.shape)
 print("test_data size", test_data.shape)
 
+bn_switch = tf.placeholder(dtype=tf.bool)
+dropout_switch = tf.placeholder(dtype=tf.float32)
 
 input_layer = tf.placeholder(dtype=tf.int32, shape=(None, args.seq_len))
 labels = tf.placeholder(dtype=tf.int32, shape=(None, args.seq_len))
@@ -75,31 +83,45 @@ k_size = args.ksize
 dropout = args.dropout
 emb_dropout = args.emb_dropout
 
-output = TCN(input_layer, n_characters, num_chans, args.emsize, kernel_size=k_size, dropout=dropout)
 
-print("Shape of output", output.get_shape())
+output = TCN(
+    input_layer,
+    n_characters,
+    num_chans,
+    args.emsize,
+    kernel_size=k_size,
+    dropout=dropout_switch,
+    bn_switch=bn_switch)
 
 eff_history = args.seq_len - args.validseqlen
 final_output = tf.reshape(output[:, eff_history:, :], (-1, n_characters))
 final_target = tf.reshape(one_hot[:, eff_history:, :], (-1, n_characters))
 
-print("shape of final", final_output.get_shape())
-
 tf.stop_gradient(final_target)
-loss = tf.nn.softmax_cross_entropy_with_logits_v2(logits=final_output,
-    labels=final_target)
+loss = tf.nn.softmax_cross_entropy_with_logits_v2(
+    logits=final_output, labels=final_target)
 
-print("shape of loss", loss.get_shape())
+cross_entropy_mean = tf.reduce_mean(loss, name='cross_entropy')
 
+#loss_for_minimization = cross_entropy_mean
 
-lr = args.lr
-optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr)
-gradients, variables = zip(*optimizer.compute_gradients(loss))
+reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+losses_regularization = tf.add_n(reg_losses, name='losses_regularization') if len(reg_losses) > 0 else tf.to_float(0)
+
+loss_for_minimization = tf.add_n([cross_entropy_mean,losses_regularization], name='total_loss')
+
+lr = tf.placeholder(dtype=tf.float32)
+if args.use_dau and False:
+    optimizer = tf.train.AdamOptimizer(learning_rate=0.001)
+else:
+    optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr)
+
+gradients, variables = zip(*optimizer.compute_gradients(loss_for_minimization))
 if args.clip > 0:
     gradients, _ = tf.clip_by_global_norm(gradients, args.clip)
 update_step = optimizer.apply_gradients(zip(gradients, variables))
 
-
+saver = tf.train.Saver(tf.global_variables())
 
 def evaluate(source, sess):
     source_len = source.shape[1]
@@ -113,17 +135,21 @@ def evaluate(source, sess):
         if target.shape[1] < args.seq_len:
             continue
 
-        _, l = sess.run([update_step, loss], feed_dict={input_layer: inp, 
-            labels: target})
+        l = sess.run(
+            [loss], feed_dict={
+                input_layer: inp,
+                labels: target,
+                bn_switch: False,
+                dropout_switch: float(0.0),
+            })
 
         losses.append(l)
-
 
     val_loss = np.mean(np.ndarray.flatten(np.array(losses)))
     return val_loss
 
 
-def train(epoch, sess):
+def train(epoch, sess, lr_val):
     total_loss = 0
     start_time = time.time()
     losses = []
@@ -135,13 +161,19 @@ def train(epoch, sess):
             continue
 
         inp, target = get_batch(source, i, args)
-
+        # print('INPUT SHAPE: ', inp.shape)
         # padding or discard?
         if target.shape[1] < args.seq_len:
             continue
-        
-        _, l = sess.run([update_step, loss], feed_dict={input_layer: inp, 
-            labels: target})
+
+        _, l = sess.run(
+            [update_step, loss], feed_dict={
+                input_layer: inp,
+                labels: target,
+                bn_switch: True,
+                dropout_switch: float(dropout),
+                lr: lr_val,
+            })
 
         total_loss += l.mean()
 
@@ -149,10 +181,13 @@ def train(epoch, sess):
             cur_loss = total_loss / args.log_interval
             losses.append(cur_loss)
             elapsed = time.time() - start_time
-            print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.5f} | ms/batch {:5.2f} | '
-                  'loss {:5.3f} | bpc {:5.3f}'.format(
-                epoch, batch_idx, int((source_len-0.5) / args.validseqlen), lr,
-                              elapsed * 1000 / args.log_interval, cur_loss, cur_loss / math.log(2)))
+            print(
+                '| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.5f} | ms/batch {:5.2f} | '
+                'loss {:5.3f} | bpc {:5.3f}'.format(
+                    epoch, batch_idx, int(
+                        (source_len - 0.5) / args.validseqlen), lr_val,
+                    elapsed * 1000 / args.log_interval, cur_loss,
+                    cur_loss / math.log(2)))
             total_loss = 0
             start_time = time.time()
 
@@ -163,64 +198,75 @@ def train(epoch, sess):
         #           'valid bpc {:8.3f}'.format(epoch, vloss, vloss / math.log(2)))
         #     model.train()
 
+
     return sum(losses) * 1.0 / len(losses)
 
 
 def main():
-    global lr
+    lr_val = args.lr
     config = tf.ConfigProto()
-    config.gpu_options.allow_growth=True
+    config.gpu_options.allow_growth = True
+    config.gpu_options.visible_device_list = args.gpu
     with tf.Session(config=config) as sess:
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
         try:
-        
-            total_variables = np.sum([np.prod(v.get_shape().as_list()) for v in tf.trainable_variables()])
+
+            total_variables = np.sum([
+                np.prod(v.get_shape().as_list())
+                for v in tf.trainable_variables()
+            ])
             print('Total variables {:5d}'.format(total_variables))
 
             global total_steps
-            total_steps = 0                
+            total_steps = 0
 
             print("Training for %d epochs..." % args.epochs)
             all_losses = []
             best_vloss = 1e7
+            best_vloss_epoch = 0
+            last_lr_drop_epoch = 0
             for epoch in range(1, args.epochs + 1):
-                loss =train(epoch, sess)
+                loss = train(epoch, sess, lr_val)
                 vloss = evaluate(val_data, sess)
 
                 print('-' * 89)
-                print('| End of epoch {:3d} | valid loss {:5.3f} | valid bpc {:8.3f}'.format(
-                    epoch, vloss, vloss / math.log(2)))
+                print(
+                    '| End of epoch {:3d} | valid loss {:5.3f} | valid bpc {:8.3f}'.
+                    format(epoch, vloss, vloss / math.log(2)))
 
                 test_loss = evaluate(test_data, sess)
                 print('=' * 89)
-                print('| End of epoch {:3d} | test loss {:5.3f} | test bpc {:8.3f}'.format(
-                    epoch, test_loss, test_loss / math.log(2)))
+                print(
+                    '| End of epoch {:3d} | test loss {:5.3f} | test bpc {:8.3f}'.
+                    format(epoch, test_loss, test_loss / math.log(2)))
                 print('=' * 89)
 
-                if epoch > 5 and vloss > max(all_losses[-3:]):
-                    lr = lr / 10.
-                    #for param_group in optimizer.param_groups:
-                    #    param_group['lr'] = lr
+                if epoch > 75 and vloss > max(all_losses[-3:]) and epoch - last_lr_drop_epoch  > 25:
+                    lr_val = lr_val / 10.
+                    last_lr_drop_epoch = epoch
                 all_losses.append(vloss)
 
-                if vloss < best_vloss:
+                if vloss < best_vloss and best_vloss_epoch > epoch + 5:
                     print("Dummy Saving...")
-                    #save(model)
+                    saver.save(sess, os.path.join(args.save_path, 'model.ckpt'), global_step=epoch)
                     best_vloss = vloss
+                    best_vloss_epoch = epoch
 
         except KeyboardInterrupt:
             print('-' * 89)
             print("Dummy Saving before quit...")
-            #save(model)
+            saver.save(sess, os.path.join(args.save_path, 'model-last.ckpt'), global_step=epoch)
 
         # Run on test data.
         test_loss = evaluate(test_data, sess)
         print('=' * 89)
-        print('| End of training | test loss {:5.3f} | test bpc {:8.3f}'.format(
-            test_loss, test_loss / math.log(2)))
+        print(
+            '| End of training | test loss {:5.3f} | test bpc {:8.3f}'.format(
+                test_loss, test_loss / math.log(2)))
         print('=' * 89)
 
+
 # train_by_random_chunk()
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+main()

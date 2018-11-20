@@ -6,7 +6,7 @@ import collections
 import io
 import os
 
-from .observations import maybe_download_and_extract
+from observations import maybe_download_and_extract
 
 
 def ptb(path):

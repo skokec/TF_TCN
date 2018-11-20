@@ -1,3 +1,10 @@
+# Forked from https://github.com/YuanTingHsieh/TF_TCN
+
+Fixed several bugs and made results compatible with [1] paper for the following experiments:
+
+ * char prediction task:
+    * PTB: 1.32 bpc (1.31 in [1])
+
 # TF TCN
 *Tensorflow Temporal Convolutional Network*
 

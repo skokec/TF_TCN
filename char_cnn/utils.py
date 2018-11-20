@@ -7,7 +7,7 @@ print('Running' if __name__ == '__main__' else 'Importing', Path(__file__).resol
 
 import pickle
 import numpy as np
-from .ptb import ptb
+from ptb import ptb
 
 def data_generator(args):
     #file, testfile, valfile = getattr(observations, args.dataset)('data/')
