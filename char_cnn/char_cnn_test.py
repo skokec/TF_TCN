@@ -6,7 +6,7 @@ import argparse
 import sys
 from utils import *
 from model import TCN
-from model_dau import TCN_DAU
+from model_dau import TCN_DAU, TCNv1_DAU
 import time
 import math
 import tensorflow as tf
@@ -67,8 +67,8 @@ file, file_len, valfile, valfile_len, testfile, testfile_len, corpus = data_gene
 
 n_characters = len(corpus.dict)
 train_data = batchify(char_tensor(corpus, file), args.batch_size)
-val_data = batchify(char_tensor(corpus, valfile), 1)
-test_data = batchify(char_tensor(corpus, testfile), 1)
+val_data = batchify(char_tensor(corpus, valfile), args.batch_size)
+test_data = batchify(char_tensor(corpus, testfile), args.batch_size)
 print("Corpus size: ", n_characters)
 print("train_data size:", train_data.shape)
 print("val_data size", val_data.shape)
@@ -88,7 +88,7 @@ emb_dropout = args.emb_dropout
 
 
 if args.use_dau:
-    output = TCN_DAU(
+    output = TCNv1_DAU(
         input_layer,
         n_characters,
         num_chans,
@@ -116,7 +116,7 @@ loss = tf.nn.softmax_cross_entropy_with_logits_v2(
 
 cross_entropy_mean = tf.reduce_mean(loss, name='cross_entropy')
 
-loss_for_minimization = cross_entropy_mean
+#loss_for_minimization = cross_entropy_mean
 
 reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
 losses_regularization = tf.add_n(reg_losses, name='losses_regularization') if len(reg_losses) > 0 else tf.to_float(0)
@@ -179,6 +179,19 @@ def train(epoch, sess, lr_val):
         if target.shape[1] < args.seq_len:
             continue
 
+        if i == 1 and False:
+            vars = sess.run(tf.global_variables())
+            grads = sess.run(gradients, feed_dict={input_layer: inp, labels: target, bn_switch: True, lr: lr_val, dropout_switch: float(dropout)})
+
+            for i, v in enumerate(vars):
+                if len(np.squeeze(v).shape) > 1:
+                    print np.std(vars.flatten()), '\t\t', str(v.shape)
+
+            for i, g in enumerate(grads):
+                if len(np.squeeze(g).shape) > 1:
+                    print np.std(g.flatten()), '\t\t', str(g.shape)
+
+
         _, l = sess.run(
             [update_step, loss], feed_dict={
                 input_layer: inp,
@@ -237,7 +250,7 @@ def main():
             print("Training for %d epochs..." % args.epochs)
             all_losses = []
             best_vloss = 1e7
-            best_vloss_epoch = 0
+            best_vloss_epoch = -20
             last_lr_drop_epoch = 0
             for epoch in range(1, args.epochs + 1):
                 loss = train(epoch, sess, lr_val)
@@ -255,12 +268,12 @@ def main():
                     format(epoch, test_loss, test_loss / math.log(2)))
                 print('=' * 89)
 
-                if epoch > 75 and vloss > max(all_losses[-3:]) and epoch - last_lr_drop_epoch  > 25:
+                if epoch > 50 and vloss > max(all_losses[-7:]) and epoch - last_lr_drop_epoch  > 10:
                     lr_val = lr_val / 10.
                     last_lr_drop_epoch = epoch
                 all_losses.append(vloss)
 
-                if vloss < best_vloss and best_vloss_epoch > epoch + 5:
+                if vloss < best_vloss and epoch -best_vloss_epoch > 10:
                     print("Dummy Saving...")
                     saver.save(sess, os.path.join(args.save_path, 'model.ckpt'), global_step=epoch)
                     best_vloss = vloss

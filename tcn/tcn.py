@@ -134,9 +134,12 @@ def weightNormConvolution1d(x, num_filters, dilation_rate, filter_size=3, stride
             # use weight normalization (Salimans & Kingma, 2016)
             W = tf.reshape(g, [1, 1, num_filters]) * tf.nn.l2_normalize(V, [0, 1])
 
+            skip_conn = x
+
             # pad x for causal convolution
             left_pad = dilation_rate * (filter_size  - 1)
             x = temporal_padding(x, (left_pad, 0))
+
 
             # calculate convolutional layer output
             x = tf.nn.bias_add(tf.nn.convolution(x, W, pad, stride, [dilation_rate]), b)
@@ -154,6 +157,9 @@ def weightNormConvolution1d(x, num_filters, dilation_rate, filter_size=3, stride
             print(x.get_shape())
 
             return x
+            #return tf.layers.conv1d(tf.concat((x, skip_conn), axis=-1), num_filters, kernel_size=1,
+            #                        activation=tf.nn.relu,
+            #                        data_format='channels_last', padding='same')
 
 def TemporalBlock(input_layer, out_channels, filter_size, stride, dilation_rate, counters,
                   dropout, init=False, atten=False, use_highway=False, gated=False):

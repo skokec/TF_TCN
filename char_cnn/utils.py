@@ -8,11 +8,12 @@ print('Running' if __name__ == '__main__' else 'Importing', Path(__file__).resol
 import pickle
 import numpy as np
 from ptb import ptb
+import observations
 
 def data_generator(args):
-    #file, testfile, valfile = getattr(observations, args.dataset)('data/')
-    if args.dataset == 'ptb':
-        file, testfile, valfile = ptb('./data')
+    file, testfile, valfile = getattr(observations, args.dataset)('./data/')
+    #if args.dataset == 'ptb':
+    #    file, testfile, valfile = ptb('./data')
     file_len = len(file)
     valfile_len = len(valfile)
     testfile_len = len(testfile)
