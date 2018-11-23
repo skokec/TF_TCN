@@ -18,7 +18,8 @@ def TCNv1_DAU(input_layer,
         kernel_size,
         dropout,
         bn_switch=None,
-        init=False):
+        init=False,
+        use_conv1x1=False):
     """
       shapes:
       input_layer: b_s, L contains the integer ID
@@ -48,7 +49,8 @@ def TCNv1_DAU(input_layer,
         embedding_size=embedding_size,
         kernel_size=kernel_size,
         dropout=dropout,
-        init=init)
+        init=init,
+        use_conv1x1=use_conv1x1)
 
     decoder_b = tf.get_variable('b_h', shape=[output_size], dtype=tf.float32, initializer=tf.zeros_initializer(), trainable=True)
     decoder = tf.nn.bias_add(tf.nn.convolution(tcn, tf.expand_dims(tf.transpose(embeddings),axis=0), 'SAME'), decoder_b)

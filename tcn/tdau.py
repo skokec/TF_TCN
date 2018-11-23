@@ -30,7 +30,7 @@ def temporal_padding(x, padding=(1, 1)):
 @add_arg_scope
 def weightNormDauConvolution1d(x, num_filters, dilation_rate, filter_size=3, stride=[1],
                             pad='VALID', init_scale=1., init=False, gated=False,
-                            counters={}, reuse=False, use_dau=True):
+                            counters={}, reuse=False, use_dau=True, use_conv1x1=False):
     """a dilated convolution with weight normalization (Salimans & Kingma 2016)
        Note that init part is NEVER used in our code
        It relates to the data-dependent init in original paper 
@@ -108,15 +108,15 @@ def weightNormDauConvolution1d(x, num_filters, dilation_rate, filter_size=3, str
                                max_kernel_size=33,
                                weights_constraint=weight_normalization,
                                weights_initializer=weight_dau_init,
-                               mu1_initializer=tf.random_uniform_initializer(
-                                   minval=-30 / 2, maxval=0, dtype=tf.float32),
-                               #mu1_initializer=tf.random_normal_initializer(stddev=2),
+                               #mu1_initializer=tf.random_uniform_initializer(
+                               #    minval=-30 / 2, maxval=0, dtype=tf.float32),
+                               mu1_initializer=tf.random_normal_initializer(stddev=2),
                                mu1_constraint=lambda mu: -tf.abs(mu),
                                #mu1_constraint=lambda mu: -(tf.exp(tf.abs(mu)) - 1),
-                               sigma_initializer=tf.constant_initializer(0.3),
+                               sigma_initializer=tf.constant_initializer(0.5),
                                biases_initializer=tf.zeros_initializer(),
                                dau_unit_border_bound=0.0,
-                               mu_learning_rate_factor=10000,
+                               mu_learning_rate_factor=100,
                                dau_aggregation_forbid_positive_dim1=True,
                                activation_fn=tf.nn.relu,
                                normalizer_fn=None,
@@ -134,24 +134,26 @@ def weightNormDauConvolution1d(x, num_filters, dilation_rate, filter_size=3, str
                 y = tf.reshape(y, shape=[-1, 8, y.shape[1], y.shape[2]])
                 y = tf.transpose(y, [0, 3, 1, 2])
 
-
                 y = y[:, :, :, :-pad_size]
 
             if x.shape[1] != y.shape[1]:
                 skip_conn = tf.zeros_like(y)
 
             # ignore right-most data value since it takes future values + add skip connection
-            #return y
-            #return tf.nn.relu(y + skip_conn)
+            if use_conv1x1:
+                 return tf.layers.conv2d(tf.concat((y,skip_conn),axis=1), num_filters, kernel_size=(1,1), activation=tf.nn.relu,
+                                        data_format='channels_first', padding='same')
+            else:
+                return y
+                #return tf.nn.relu(y + skip_conn)
 
-            return tf.layers.conv2d(tf.concat((y,skip_conn),axis=1), num_filters, kernel_size=(1,1), activation=tf.nn.relu,
-                                    data_format='channels_first', padding='same')
+
 
 
 
 
 def TemporalDauBlock(input_layer, out_channels, filter_size, stride, dilation_rate, counters,
-                  dropout, init=False, atten=False, use_highway=False, gated=False, use_dau=True):
+                  dropout, init=False, atten=False, use_highway=False, gated=False, use_dau=True, use_conv1x1=False):
     """temporal block in TCN (Bai 2018)
     # Arguments
         input_layer: A tensor of shape [N, L, Cin]
@@ -181,7 +183,7 @@ def TemporalDauBlock(input_layer, out_channels, filter_size, stride, dilation_ra
         # which is the number of out channels
         conv1 = weightNormDauConvolution1d(input_layer, out_channels, dilation_rate,
                                         filter_size, [stride], counters=counters,
-                                        init=init, gated=gated, use_dau=use_dau)
+                                        init=init, gated=gated, use_dau=use_dau, use_conv1x1=use_conv1x1)
         # set noise shape for spatial dropout
         # refer to https://colab.research.google.com/drive/1la33lW7FQV1RicpfzyLq9H0SH1VSD4LE#scrollTo=TcFQu3F0y-fy
         # shape should be [N, 1, C]
@@ -189,7 +191,7 @@ def TemporalDauBlock(input_layer, out_channels, filter_size, stride, dilation_ra
 
         conv2 = weightNormDauConvolution1d(out1, out_channels, dilation_rate,
                                            filter_size, [stride], counters=counters,
-                                           init=init, gated=gated, use_dau=use_dau)
+                                           init=init, gated=gated, use_dau=use_dau, use_conv1x1=use_conv1x1)
         out2 = tf.nn.dropout(conv2, keep_prob)
 
         # highway connetions or residual connection
@@ -211,7 +213,7 @@ def TemporalDauBlock(input_layer, out_channels, filter_size, stride, dilation_ra
 
 def TemporalDauConvNet(input_layer, num_channels, sequence_length, embedding_size, kernel_size=2,
                     dropout=tf.constant(0.0, dtype=tf.float32), init=False,
-                    atten=False, use_highway=False, use_gated=False):
+                    atten=False, use_highway=False, use_gated=False, use_conv1x1=False):
     """A stacked dilated CNN architecture described in Bai 2018
     # Arguments
         input_layer: Tensor of shape [N, L, Cin]
@@ -245,7 +247,8 @@ def TemporalDauConvNet(input_layer, num_channels, sequence_length, embedding_siz
         dilation_size = 1 # 2 ** i
         out_channels = num_channels[i]
         input_layer = TemporalDauBlock(input_layer, out_channels, kernel_size, stride=1, dilation_rate=dilation_size,
-                                 counters=counters, dropout=dropout, init=init, atten=atten, gated=use_gated, use_dau=use_dau)
+                                 counters=counters, dropout=dropout, init=init, atten=atten, gated=use_gated,
+                                       use_dau=use_dau, use_conv1x1=use_conv1x1)
 
     # convert back to original layout
     input_layer = tf.transpose(input_layer, perm=[0, 2, 3, 1])

@@ -41,6 +41,8 @@ parser.add_argument('--gpu', type=str, default='0',
                     help='gpu id (default: 0)')
 parser.add_argument('--use_dau', action='store_true',
                     help='enable DAU model (default: false)')
+parser.add_argument('--use_conv1x1', action='store_true',
+                    help='combine conv1d output with input using conv1x1 (default: false)')
 
 args = parser.parse_args()
 
@@ -79,7 +81,8 @@ if args.use_dau:
         args.emsize,
         kernel_size=k_size,
         dropout=dropout_switch,
-        bn_switch=bn_switch)
+        bn_switch=bn_switch,
+        use_conv1x1=args.use_conv1x1)
 else:
     output = TCN(
         input_layer,
@@ -135,15 +138,22 @@ def main():
 
         ckpt = tf.train.get_checkpoint_state(args.save_path)
 
-        saver.restore(sess, ckpt.model_checkpoint_path)
+        all_mu_vars = []
+        for m in ckpt.all_model_checkpoint_paths:
 
-        # Run on test data.
-        test_loss = evaluate(test_data, sess)
-        print('=' * 89)
-        print(
-            '| End of training | test loss {:5.3f} | test bpc {:8.3f}'.format(
-                test_loss, test_loss / math.log(2)))
-        print('=' * 89)
+            saver.restore(sess, m)
+
+            # Run on test data.
+            test_loss = evaluate(test_data, sess)
+
+            mu_vars = sess.run([v for v in tf.global_variables() if 'DAUConv/mu1' in v.name])
+
+            print('| {} | test loss {:5.3f} | test bpc {:8.3f}'.format(m, test_loss, test_loss / math.log(2)))
+
+            all_mu_vars.append(mu_vars)
+
+        pass
+
 
 
 

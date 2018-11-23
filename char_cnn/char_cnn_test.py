@@ -55,6 +55,8 @@ parser.add_argument('--gpu', type=str, default='0',
                     help='gpu id (default: 0)')
 parser.add_argument('--use_dau', action='store_true',
                     help='enable DAU model (default: false)')
+parser.add_argument('--use_conv1x1', action='store_true',
+                    help='combine conv1d output with input using conv1x1 (default: false)')
 
 args = parser.parse_args()
 
@@ -95,7 +97,8 @@ if args.use_dau:
         args.emsize,
         kernel_size=k_size,
         dropout=dropout_switch,
-        bn_switch=bn_switch)
+        bn_switch=bn_switch,
+        use_conv1x1=args.use_conv1x1)
 else:
     output = TCN(
         input_layer,
@@ -134,7 +137,7 @@ if args.clip > 0:
     gradients, _ = tf.clip_by_global_norm(gradients, args.clip)
 update_step = optimizer.apply_gradients(zip(gradients, variables))
 
-saver = tf.train.Saver(tf.global_variables())
+saver = tf.train.Saver(tf.global_variables(), max_to_keep=100)
 
 def evaluate(source, sess):
     source_len = source.shape[1]
@@ -253,6 +256,8 @@ def main():
             best_vloss_epoch = -20
             last_lr_drop_epoch = 0
             for epoch in range(1, args.epochs + 1):
+                plot_mu_dist(sess,epoch-1)
+
                 loss = train(epoch, sess, lr_val)
                 vloss = evaluate(val_data, sess)
 
@@ -273,11 +278,12 @@ def main():
                     last_lr_drop_epoch = epoch
                 all_losses.append(vloss)
 
-                if vloss < best_vloss and epoch -best_vloss_epoch > 10:
+                if vloss < best_vloss and epoch -best_vloss_epoch >= 10:
                     print("Dummy Saving...")
                     saver.save(sess, os.path.join(args.save_path, 'model.ckpt'), global_step=epoch)
                     best_vloss = vloss
                     best_vloss_epoch = epoch
+
 
         except KeyboardInterrupt:
             print('-' * 89)
@@ -291,6 +297,32 @@ def main():
             '| End of training | test loss {:5.3f} | test bpc {:8.3f}'.format(
                 test_loss, test_loss / math.log(2)))
         print('=' * 89)
+
+def plot_mu_dist(sess, epoch):
+    import pylab as plt
+
+    g_vars = sess.run([v for v in tf.global_variables() if 'DAUConv/g' in v.name])
+    w_vars = sess.run([v for v in tf.global_variables() if 'DAUConv/weight' in v.name])
+    mu_vars = sess.run([v for v in tf.global_variables() if 'DAUConv/mu1' in v.name])
+
+    f = plt.figure(figsize=(16,6))
+    for i in range(len(mu_vars)):
+        plt.subplot(2, 6, i + 1)
+        plt.hist(np.abs(mu_vars[i].flatten()), bins=100)
+        plt.title('mu ly%d' % i)
+
+    for i in range(len(mu_vars)):
+        plt.subplot(2, 6, 6 + i + 1)
+        plt.hist(np.abs(mu_vars[i].flatten()), bins=100,
+                 weights=np.abs(g_vars[i] * w_vars[i] / np.sum(w_vars[i] ** 2, axis=(0, 1, 2))).flatten())
+        plt.title('mu*w ly%d' % i)
+
+    plt.show(block=False)
+
+    f.savefig(os.path.join(args.save_path,'mu_dist_epoch_%d.pdf' % epoch))
+    f.savefig(os.path.join(args.save_path, 'mu_dist_epoch_%d.png' % epoch))
+
+    plt.close()
 
 
 # train_by_random_chunk()
